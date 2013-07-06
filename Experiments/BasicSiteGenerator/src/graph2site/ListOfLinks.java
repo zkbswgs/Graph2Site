@@ -4,17 +4,23 @@ import org.neo4j.graphdb.*;
 import org.neo4j.graphdb.factory.GraphDatabaseFactory;
 import org.neo4j.kernel.impl.util.FileUtils;
 import org.neo4j.tooling.GlobalGraphOperations;
+import org.thymeleaf.TemplateEngine;
+import org.thymeleaf.context.Context;
+import org.thymeleaf.templateresolver.ClassLoaderTemplateResolver;
+import org.thymeleaf.templateresolver.FileTemplateResolver;
 
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.io.StringWriter;
+import java.util.LinkedList;
 
 public class ListOfLinks {
 
     private static final String DB_PATH = "target/neo4j-lol-db";
     private static final String SITE_PATH = "target/sites/lol/";
 
-    private static enum MyLabels implements Label {WEBPAGE, LINK };
+    private static enum MyLabels implements Label {WEBPAGE, LINK, COMPONENT, TEMPLATE };
     private static enum MyRelTypes implements RelationshipType {SHOWS};
 
     private static String PROP_TITLE = "Title";
@@ -104,31 +110,49 @@ public class ListOfLinks {
         FileUtils.deleteRecursively(websiteDir);
         websiteDir.mkdirs();
 
+        FileTemplateResolver resolver = new FileTemplateResolver();
+        resolver.setPrefix("templates/");
+        resolver.setSuffix(".tpl");
+        resolver.setTemplateMode("HTML5");
+        TemplateEngine templateEngine = new TemplateEngine();
+        templateEngine.setTemplateResolver(resolver);
+        Context context = new Context();
+
         for (Node page : GlobalGraphOperations.at(graphDb).getAllNodesWithLabel(MyLabels.WEBPAGE)) {
             String fileName = (String)page.getProperty(PROP_FILE_NAME, "missing_file_name.html");
             String title = (String)page.getProperty(PROP_TITLE, "Missing Title");
-            StringBuffer content = new StringBuffer();
 
-            //very crude - no html escaping, all is hardcoded
-            content.append(String.format(
-                    "<html><head><title>%s</title></head><body><h1>%s</h1>",
-                    title, title));
-            content.append("<ol>");
-            for (Relationship showRel : page.getRelationships(Direction.OUTGOING, MyRelTypes.SHOWS)) {
-                Node linkNode = showRel.getEndNode();
-                content.append(String.format(
-                        "<li><a href='%s'>%s</a></li>",
-                        linkNode.getProperty(PROP_URL),
-                        linkNode.getProperty(PROP_TITLE)
-                ));
-            }
-            content.append("</ol></body></html>");
+            StringWriter writer = new StringWriter();
+
+            context.setVariable("title", title);
+            context.setVariable("links", getLinks(page));
+
+            templateEngine.process("webpage", context, writer);
+
 
             File pageFile = new File(websiteDir, fileName);
 
             //spit it out
-            new FileWriter(pageFile).append(content).close();
+            new FileWriter(pageFile).append(writer.toString()).close();
         }
+    }
+
+    private class WebLink
+    {
+        public String title;
+        public String URL;
+    }
+
+    private LinkedList<WebLink> getLinks(Node page) {
+        LinkedList<WebLink> result = new LinkedList <WebLink>();
+        for (Relationship showRel : page.getRelationships(Direction.OUTGOING, MyRelTypes.SHOWS)) {
+            Node linkNode = showRel.getEndNode();
+            WebLink link  = new WebLink();
+            link.title = (String)linkNode.getProperty(PROP_TITLE);
+            link.URL = (String)linkNode.getProperty(PROP_URL);
+            result.addLast(link);
+        }
+        return result;
     }
 
     private void shutDown() {
